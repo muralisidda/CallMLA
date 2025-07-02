@@ -102,7 +102,7 @@ def serve_audio(filename):
     """
     return send_from_directory('static/audio', filename)
 
-@app.route('/voice-response', methods=['POST'])
+@app.route('/voice-response', methods=['GET', 'POST'])
 def voice_response():
     """
     Handle incoming Exotel calls and respond with TwiML
@@ -118,12 +118,12 @@ def voice_response():
     """
     try:
         # Log call details
-        call_sid = request.form.get('CallSid', 'Unknown')
-        call_from = request.form.get('CallFrom', 'Unknown')
+        call_sid = request.values.get('CallSid', 'Unknown')  # Using values to handle both GET and POST
+        call_from = request.values.get('CallFrom', 'Unknown')
         logger.info(f"Received call: SID={call_sid}, From={call_from}")
         
         # Get Telugu message from request or use default
-        telugu_message = request.form.get('message', "మీరు ఎవరు చెప్పండి, మీ సమస్య ఏమిటి?")
+        telugu_message = request.values.get('message', "మీరు ఎవరు చెప్పండి, మీ సమస్య ఏమిటి?")
         
         # Generate audio for the Telugu message
         success = generate_telugu_audio(telugu_message)
