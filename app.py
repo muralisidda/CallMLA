@@ -92,22 +92,36 @@ def create_twiml_response(audio_url):
 @app.route('/audio/<path:filename>')
 def serve_audio(filename):
     """
-    Serve the generated audio file
+    Serve the generated audio file with proper headers
     
     Args:
         filename (str): Name of the audio file to serve
         
     Returns:
-        Response: Flask response with audio file
+        Response: Flask response with audio file and proper headers
     """
-    return send_from_directory('static/audio', filename)
+    try:
+        logger.info(f"Request to serve audio file: {filename}")
+        response = send_from_directory('static/audio', filename)
+        
+        # Add headers to ensure proper streaming
+        response.headers['Content-Type'] = 'audio/mpeg'
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        logger.info(f"Serving audio file with headers: {dict(response.headers)}")
+        return response
+    except Exception as e:
+        logger.exception(f"Error serving audio file: {str(e)}")
+        return Response("Error serving audio file", status=500)
 
 @app.route('/voice-response', methods=['GET', 'POST'])
 def voice_response():
     """
     Handle incoming Exotel calls and respond with TwiML
     
-    Expected POST parameters from Exotel:
+    Expected parameters from Exotel:
     - CallSid: Unique call identifier
     - CallFrom: Caller's phone number
     - CallTo: Called phone number
@@ -118,9 +132,12 @@ def voice_response():
     """
     try:
         # Log call details
-        call_sid = request.values.get('CallSid', 'Unknown')  # Using values to handle both GET and POST
+        call_sid = request.values.get('CallSid', 'Unknown')
         call_from = request.values.get('CallFrom', 'Unknown')
         logger.info(f"Received call: SID={call_sid}, From={call_from}")
+        
+        # Log all request parameters for debugging
+        logger.info(f"All request parameters: {request.values.to_dict()}")
         
         # Get Telugu message from request or use default
         telugu_message = request.values.get('message', "మీరు ఎవరు చెప్పండి, మీ సమస్య ఏమిటి?")
@@ -129,20 +146,43 @@ def voice_response():
         success = generate_telugu_audio(telugu_message)
         
         if success:
-            # Create the full audio URL (including domain)
-            audio_url = request.host_url.rstrip('/') + '/audio/' + AUDIO_FILENAME
+            # Ensure we're using an absolute URL that's publicly accessible
+            # You need to replace this with your public-facing domain
+            # If you're testing locally, you might need a tool like ngrok
+            server_url = request.host_url.rstrip('/')
+            if 'localhost' in server_url or '127.0.0.1' in server_url:
+                logger.warning("Using localhost URL which won't be accessible to Exotel. Consider using ngrok for testing.")
+            
+            audio_url = f"{server_url}/audio/{AUDIO_FILENAME}"
             logger.info(f"Audio URL: {audio_url}")
             
-            # Generate and return TwiML response
-            return create_twiml_response(audio_url)
+            # Enhanced TwiML response with more options
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>We are playing a message for you.</Say>
+    <Play>{audio_url}</Play>
+    <Pause length="1"/>
+    <Say>Thank you for calling.</Say>
+</Response>"""
+            
+            logger.info(f"Returning TwiML response: {twiml}")
+            return Response(twiml, mimetype='text/xml')
         else:
             # Return error response if audio generation failed
             logger.error("Failed to generate audio, returning error response")
-            return Response("Failed to generate audio", status=500, mimetype='text/plain')
+            twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Sorry, we couldn't generate the audio response. Please try again later.</Say>
+</Response>"""
+            return Response(twiml, mimetype='text/xml')
     
     except Exception as e:
         logger.exception(f"Error processing voice response: {str(e)}")
-        return Response("Internal server error", status=500, mimetype='text/plain')
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Sorry, an error occurred. Please try again later.</Say>
+</Response>"""
+        return Response(twiml, mimetype='text/xml')
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -309,6 +349,74 @@ def greet_user():
     </html>
     '''
     return render_template_string(html)
+
+@app.route('/test-audio')
+def test_audio():
+    """
+    Test endpoint to check if audio generation and playback works
+    
+    Returns:
+        Response: HTML page with audio player to test the audio
+    """
+    # Generate audio with a test message
+    test_message = "ఇది ఒక పరీక్ష సందేశం. ఈ ఆడియో మీరు వింటున్నారా?"  # "This is a test message. Can you hear this audio?" in Telugu
+    success = generate_telugu_audio(test_message)
+    
+    if success:
+        html = f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Audio Test</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                h1 {{
+                    color: #333;
+                }}
+                .container {{
+                    background-color: #f5f5f5;
+                    padding: 20px;
+                    border-radius: 5px;
+                    margin-top: 20px;
+                }}
+                .debug {{
+                    background-color: #f8f9fa;
+                    border: 1px solid #ddd;
+                    padding: 15px;
+                    margin-top: 20px;
+                    font-family: monospace;
+                    white-space: pre-wrap;
+                }}
+            </style>
+        </head>
+        <body>
+            <h1>Audio Test</h1>
+            <div class="container">
+                <h2>Testing Audio Playback</h2>
+                <p>If you can hear the audio below, the audio generation is working correctly.</p>
+                <p>Message: {test_message}</p>
+                <audio controls autoplay>
+                    <source src="/audio/{AUDIO_FILENAME}" type="audio/mpeg">
+                    Your browser does not support the audio element.
+                </audio>
+                <p><a href="/test-audio" class="button">Generate New Test Audio</a></p>
+            </div>
+            <div class="debug">
+                <h3>Debug Information:</h3>
+                <p>Audio File Path: {AUDIO_PATH}</p>
+                <p>Audio URL: {request.host_url.rstrip('/')}/audio/{AUDIO_FILENAME}</p>
+            </div>
+        </body>
+        </html>
+        '''
+        return render_template_string(html)
+    else:
+        return "Failed to generate test audio.", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
